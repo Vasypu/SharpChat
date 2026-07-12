@@ -1,0 +1,178 @@
+﻿@page "/"
+@using Messenger.BlazorClient.Models
+@using Microsoft.AspNetCore.SignalR.Client
+@implements IAsyncDisposable
+
+<div class="messenger-app">
+    
+    @if (!isLoggedIn)
+    {
+        <div class="login-screen">
+            <div class="login-box">
+                <h2>Вход в SharpChat 💬</h2>
+                <input @bind="currentUserName" placeholder="Введите ваш никнейм..." class="form-control mb-3" />
+                <button @onclick="ConnectToChat" disabled="@string.IsNullOrWhiteSpace(currentUserName)" class="btn btn-primary w-100">
+                    Войти
+                </button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="messenger-container">
+            
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <h4>@currentUserName (Вы)</h4>
+                </div>
+                <div class="contacts-list">
+                    @foreach (var contact in contacts)
+                    {
+                        <div class="contact-item @(selectedContact == contact ? "active" : "")" 
+                             @onclick="() => SelectContact(contact)">
+                            <div class="contact-avatar">@contact.Name[0].ToString().ToUpper()</div>
+                            <div class="contact-info">
+                                <div class="contact-name">@contact.Name</div>
+                                <div class="contact-last-msg">
+                                    @(contact.Messages.LastOrDefault()?.Text ?? "Нет сообщений")
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    @if (!contacts.Any())
+                    {
+                        <div class="p-3 text-muted text-center" style="font-size: 0.9em;">
+                            Пока никто не подключен. Откройте вкладку в другом браузере и введите другой ник!
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="chat-area">
+                @if (selectedContact != null)
+                {
+                    <div class="chat-header">
+                        <h4>💬 @selectedContact.Name</h4>
+                    </div>
+
+                    <div class="chat-history">
+                        @foreach (var msg in selectedContact.Messages)
+                        {
+                            <div class="message-wrapper @(msg.IsOwnMessage ? "own-wrapper" : "their-wrapper")">
+                                <div class="message-bubble @(msg.IsOwnMessage ? "own" : "their")">
+                                    <div class="message-text">@msg.Text</div>
+                                    <div class="message-time">@msg.Timestamp</div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="chat-input-panel">
+                        <input @bind="messageText" @bind:event="oninput" @onkeyup="HandleKeyPress" 
+                               placeholder="Написать сообщение..." class="form-control" />
+                        <button @onclick="SendMessage" disabled="@string.IsNullOrWhiteSpace(messageText)" class="btn-send">
+                            ▶
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="no-chat-selected">
+                        <p>Выберите, кому хотите написать из списка слева 👈</p>
+                    </div>
+                }
+            </div>
+
+        </div>
+    }
+</div>
+
+@code {
+    private HubConnection? hubConnection;
+    private string currentUserName = "";
+    private string messageText = "";
+    private bool isLoggedIn = false;
+
+    private List<Contact> contacts = new();
+    private Contact? selectedContact;
+
+    private async Task ConnectToChat()
+    {
+        // ХАК ДЛЯ ТЕСТА: Чтобы было кому написать, автоматически добавим базовые контакты,
+        // если мы зашли под определенными именами
+        if (currentUserName.Equals("Алиса", StringComparison.OrdinalIgnoreCase))
+            contacts.Add(new Contact { Name = "Боб" });
+        else if (currentUserName.Equals("Бob", StringComparison.OrdinalIgnoreCase) || currentUserName.Equals("Боб", StringComparison.OrdinalIgnoreCase))
+            contacts.Add(new Contact { Name = "Алиса" });
+
+        isLoggedIn = true;
+
+        // Настройка SignalR с передачей username в Query String
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl($"http://192.168.101.3:5221/chathub?username={Uri.EscapeDataString(currentUserName)}")
+            .WithAutomaticReconnect()
+            .Build();
+
+        // Слушаем приватные сообщения от сервера
+        hubConnection.On<ChatMessage>("ReceivePrivateMessage", chatMessage =>
+        {
+            bool isOwn = chatMessage.User.Equals(currentUserName, StringComparison.OrdinalIgnoreCase);
+
+            // Определяем, к какому чату относится сообщение
+            // Если отправили мы — ищем чат с получателем. Если нам — чат с отправителем.
+            string targetChatName = isOwn ? selectedContact?.Name ?? "" : chatMessage.User;
+
+            if (string.IsNullOrEmpty(targetChatName)) return;
+
+            // Ищем контакт в списке, если его нет — создаем динамически
+            var contact = contacts.FirstOrDefault(c => c.Name.Equals(targetChatName, StringComparison.OrdinalIgnoreCase));
+            if (contact == null)
+            {
+                contact = new Contact { Name = targetChatName };
+                contacts.Add(contact);
+            }
+
+            contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortDateString(), isOwn));
+
+            StateHasChanged();
+        });
+
+        await hubConnection.StartAsync();
+    }
+
+    private async Task SendMessage()
+    {
+        if (hubConnection is not null && selectedContact is not null && !string.IsNullOrWhiteSpace(messageText))
+        {
+            // Вызываем наш приватный метод на сервере
+            try
+            {
+                await hubConnection.InvokeAsync("SendPrivateMessage", selectedContact.Name, messageText);
+                messageText = string.Empty;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+    }
+
+    private void SelectContact(Contact contact)
+    {
+        selectedContact = contact;
+    }
+
+    private async Task HandleKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SendMessage();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null) await hubConnection.DisposeAsync();
+    }
+}
