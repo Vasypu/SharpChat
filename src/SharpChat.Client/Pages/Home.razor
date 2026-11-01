@@ -24,6 +24,7 @@
             <div class="sidebar">
                 <div class="sidebar-header">
                     <h4>@currentUserName (Вы)</h4>
+                    <small class="text-muted">Статус: @ConnectionStatus</small>
                 </div>
                 <div class="contacts-list">
                     @foreach (var contact in contacts)
@@ -96,6 +97,9 @@
     private List<Contact> contacts = new();
     private Contact? selectedContact;
 
+    // Свойство для отображения статуса подключения
+    private string ConnectionStatus => hubConnection?.State.ToString() ?? "No connection";
+
     private async Task ConnectToChat()
     {
         // ХАК ДЛЯ ТЕСТА: Чтобы было кому написать, автоматически добавим базовые контакты,
@@ -109,41 +113,102 @@
 
         // Настройка SignalR с передачей username в Query String
         hubConnection = new HubConnectionBuilder()
-            .WithUrl($"http://192.168.101.3:5221/chathub?username={Uri.EscapeDataString(currentUserName)}")
+            .WithUrl($"http://192.168.101.9:5221/chathub?username={Uri.EscapeDataString(currentUserName)}")
             .WithAutomaticReconnect()
             .Build();
+
+        // Обработчики событий подключения
+        hubConnection.Closed += async (error) =>
+        {
+            Console.WriteLine($"Подключение закрыто. Ошибка: {error?.Message}");
+            await InvokeAsync(StateHasChanged);
+        };
+
+        hubConnection.Reconnecting += async (error) =>
+        {
+            Console.WriteLine($"Переподключение... Ошибка: {error?.Message}");
+            await InvokeAsync(StateHasChanged);
+        };
+
+        hubConnection.Reconnected += async (connectionId) =>
+        {
+            Console.WriteLine($"Переподключено. ID подключения: {connectionId}");
+            await InvokeAsync(StateHasChanged);
+        };
 
         // Слушаем приватные сообщения от сервера
         hubConnection.On<ChatMessage>("ReceivePrivateMessage", chatMessage =>
         {
-            bool isOwn = chatMessage.User.Equals(currentUserName, StringComparison.OrdinalIgnoreCase);
-
-            // Определяем, к какому чату относится сообщение
-            // Если отправили мы — ищем чат с получателем. Если нам — чат с отправителем.
-            string targetChatName = isOwn ? selectedContact?.Name ?? "" : chatMessage.User;
-
-            if (string.IsNullOrEmpty(targetChatName)) return;
-
-            // Ищем контакт в списке, если его нет — создаем динамически
-            var contact = contacts.FirstOrDefault(c => c.Name.Equals(targetChatName, StringComparison.OrdinalIgnoreCase));
-            if (contact == null)
+            try
             {
-                contact = new Contact { Name = targetChatName };
-                contacts.Add(contact);
+                bool isOwn = chatMessage.User.Equals(currentUserName, StringComparison.OrdinalIgnoreCase);
+
+                // Определяем, к какому чату относится сообщение
+                // Если отправили мы — ищем чат с получателем. Если нам — чат с отправителем.
+                string targetChatName = isOwn ? selectedContact?.Name ?? "" : chatMessage.User;
+
+                if (string.IsNullOrEmpty(targetChatName)) return;
+
+                // Ищем контакт в списке, если его нет — создаем динамически
+                var contact = contacts.FirstOrDefault(c => c.Name.Equals(targetChatName, StringComparison.OrdinalIgnoreCase));
+                if (contact == null)
+                {
+                    contact = new Contact { Name = targetChatName };
+                    contacts.Add(contact);
+                }
+
+                contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortDateString(), isOwn));
+
+                InvokeAsync(StateHasChanged);
             }
-
-            contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortDateString(), isOwn));
-
-            StateHasChanged();
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при обработке входящего сообщения: {ex.Message}");
+            }
         });
 
-        await hubConnection.StartAsync();
+        try
+        {
+            await hubConnection.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при подключении к чату: {ex.Message}");
+            // Можно добавить показ ошибки пользователю
+            isLoggedIn = false;
+            return;
+        }
     }
 
     private async Task SendMessage()
     {
         if (hubConnection is not null && selectedContact is not null && !string.IsNullOrWhiteSpace(messageText))
         {
+            // Проверяем состояние подключения перед отправкой
+            if (hubConnection.State != HubConnectionState.Connected)
+            {
+                Console.WriteLine($"Подключение неактивно. Текущий статус: {hubConnection.State}");
+                
+                // Пытаемся переподключиться, если подключение было потеряно
+                if (hubConnection.State == HubConnectionState.Disconnected)
+                {
+                    try
+                    {
+                        await hubConnection.StartAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ошибка при переподключении: {ex.Message}");
+                        return;
+                    }
+                }
+                else
+                {
+                    // Если подключение в процессе установки, ждем
+                    return;
+                }
+            }
+
             // Вызываем наш приватный метод на сервере
             try
             {
@@ -152,8 +217,8 @@
             }
             catch (Exception e)
             {
-                Console.WriteLine(e);
-                throw;
+                Console.WriteLine($"Ошибка отправки сообщения: {e.Message}");
+                // Не выбрасываем исключение, чтобы не ломать UI
             }
         }
     }
@@ -173,6 +238,23 @@
 
     public async ValueTask DisposeAsync()
     {
-        if (hubConnection is not null) await hubConnection.DisposeAsync();
+        if (hubConnection is not null)
+        {
+            try
+            {
+                if (hubConnection.State == HubConnectionState.Connected)
+                {
+                    await hubConnection.StopAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при закрытии соединения: {ex.Message}");
+            }
+            finally
+            {
+                await hubConnection.DisposeAsync();
+            }
+        }
     }
 }
