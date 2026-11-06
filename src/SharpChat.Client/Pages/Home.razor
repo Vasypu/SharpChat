@@ -1,6 +1,10 @@
 ﻿@page "/"
 @using Messenger.BlazorClient.Models
 @using Microsoft.AspNetCore.SignalR.Client
+@using Messenger.BlazorClient.Services
+@using Messenger.BlazorClient.Models.StorageModels
+@inject NavigationManager Navigation
+@inject IStorageService Storage
 @implements IAsyncDisposable
 
 <div class="messenger-app">
@@ -10,9 +14,23 @@
         <div class="login-screen">
             <div class="login-box">
                 <h2>Вход в SharpChat 💬</h2>
-                <input @bind="currentUserName" placeholder="Введите ваш никнейм..." class="form-control mb-3" />
-                <button @onclick="ConnectToChat" disabled="@string.IsNullOrWhiteSpace(currentUserName)" class="btn btn-primary w-100">
-                    Войти
+                @if (!string.IsNullOrEmpty(loginErrorMessage))
+                {
+                    <div class="alert alert-danger" style="font-size: 0.9em; border-radius: 8px; margin-bottom: 15px;">
+                        ⚠️ @loginErrorMessage
+                    </div>
+                }
+                <input @bind="currentUserName" placeholder="Введите ваш никнейм..." class="form-control mb-3" disabled="@isConnecting" />
+                <button @onclick="ConnectToChat" disabled="@(string.IsNullOrWhiteSpace(currentUserName) || isConnecting)" class="btn btn-primary w-100">
+                    @if (isConnecting)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        <span> Подключение...</span>
+                    }
+                    else
+                    {
+                        <span>Войти</span>
+                    }
                 </button>
             </div>
         </div>
@@ -20,11 +38,11 @@
     else
     {
         <div class="messenger-container">
-            
+
             <div class="sidebar">
                 <div class="sidebar-header">
                     <h4>@currentUserName (Вы)</h4>
-                    <small class="text-muted">Статус: @ConnectionStatus</small>
+                    <small class="text-muted">Статус: @ConnectionStatusText</small>
                 </div>
                 <div class="contacts-list">
                     @foreach (var contact in contacts)
@@ -52,8 +70,11 @@
             <div class="chat-area">
                 @if (selectedContact != null)
                 {
-                    <div class="chat-header">
+                    <div class="chat-header" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <h4>💬 @selectedContact.Name</h4>
+                        <span class="connection-status-badge @ConnectionStatusClass">
+                            ● @ConnectionStatusText
+                        </span>
                     </div>
 
                     <div class="chat-history">
@@ -70,8 +91,11 @@
 
                     <div class="chat-input-panel">
                         <input @bind="messageText" @bind:event="oninput" @onkeyup="HandleKeyPress" 
-                               placeholder="Написать сообщение..." class="form-control" />
-                        <button @onclick="SendMessage" disabled="@string.IsNullOrWhiteSpace(messageText)" class="btn-send">
+                               placeholder="Написать сообщение..." class="form-control" 
+                               disabled="@(hubConnection?.State != HubConnectionState.Connected)" />
+                        <button @onclick="SendMessage" 
+                                disabled="@(string.IsNullOrWhiteSpace(messageText) || hubConnection?.State != HubConnectionState.Connected)" 
+                                class="btn-send">
                             ▶
                         </button>
                     </div>
@@ -93,61 +117,72 @@
     private string currentUserName = "";
     private string messageText = "";
     private bool isLoggedIn = false;
+    private bool isConnecting = false;
+    private string? loginErrorMessage;
 
     private List<Contact> contacts = new();
     private Contact? selectedContact;
 
-    // Свойство для отображения статуса подключения
-    private string ConnectionStatus => hubConnection?.State.ToString() ?? "No connection";
+    private string ConnectionStatusText => hubConnection?.State switch
+    {
+        HubConnectionState.Connected => "Подключено",
+        HubConnectionState.Connecting => "Подключение...",
+        HubConnectionState.Reconnecting => "Переподключение...",
+        HubConnectionState.Disconnected => "Отключено",
+        _ => "Нет подключения"
+    };
+
+    private string ConnectionStatusClass => hubConnection?.State switch
+    {
+        HubConnectionState.Connected => "status-connected",
+        HubConnectionState.Connecting => "status-connecting",
+        HubConnectionState.Reconnecting => "status-reconnecting",
+        HubConnectionState.Disconnected => "status-disconnected",
+        _ => "status-disconnected"
+    };
 
     private async Task ConnectToChat()
     {
-        // ХАК ДЛЯ ТЕСТА: Чтобы было кому написать, автоматически добавим базовые контакты,
-        // если мы зашли под определенными именами
-        if (currentUserName.Equals("Алиса", StringComparison.OrdinalIgnoreCase))
-            contacts.Add(new Contact { Name = "Боб" });
-        else if (currentUserName.Equals("Бob", StringComparison.OrdinalIgnoreCase) || currentUserName.Equals("Боб", StringComparison.OrdinalIgnoreCase))
-            contacts.Add(new Contact { Name = "Алиса" });
+        loginErrorMessage = null;
+        isConnecting = true;
+        StateHasChanged();
 
-        isLoggedIn = true;
-
-        // Настройка SignalR с передачей username в Query String
-        hubConnection = new HubConnectionBuilder()
-            .WithUrl($"http://192.168.101.9:5221/chathub?username={Uri.EscapeDataString(currentUserName)}")
-            .WithAutomaticReconnect()
-            .Build();
-
-        // Обработчики событий подключения
-        hubConnection.Closed += async (error) =>
+        try
         {
-            Console.WriteLine($"Подключение закрыто. Ошибка: {error?.Message}");
-            await InvokeAsync(StateHasChanged);
-        };
+            var uri = new Uri(Navigation.Uri);
+            var hubUrl = $"{uri.Scheme}://{uri.Host}:5221/chathub?username={Uri.EscapeDataString(currentUserName)}";
 
-        hubConnection.Reconnecting += async (error) =>
-        {
-            Console.WriteLine($"Переподключение... Ошибка: {error?.Message}");
-            await InvokeAsync(StateHasChanged);
-        };
+            // Настройка SignalR с передачей username в Query String
+            hubConnection = new HubConnectionBuilder()
+                .WithUrl(hubUrl)
+                .WithAutomaticReconnect()
+                .Build();
 
-        hubConnection.Reconnected += async (connectionId) =>
-        {
-            Console.WriteLine($"Переподключено. ID подключения: {connectionId}");
-            await InvokeAsync(StateHasChanged);
-        };
+            // Регистрация событий состояния подключения для обновления интерфейса
+            hubConnection.Closed += async (exception) =>
+            {
+                await InvokeAsync(StateHasChanged);
+            };
+            hubConnection.Reconnecting += async (exception) =>
+            {
+                await InvokeAsync(StateHasChanged);
+            };
+            hubConnection.Reconnected += async (connectionId) =>
+            {
+                await InvokeAsync(StateHasChanged);
+                await RetrySendUnsyncedMessagesAsync();
+            };
 
-        // Слушаем приватные сообщения от сервера
-        hubConnection.On<ChatMessage>("ReceivePrivateMessage", chatMessage =>
-        {
-            try
+            // Слушаем приватные сообщения от сервера
+            hubConnection.On<ChatMessage>("ReceivePrivateMessage", async chatMessage =>
             {
                 bool isOwn = chatMessage.User.Equals(currentUserName, StringComparison.OrdinalIgnoreCase);
 
                 // Определяем, к какому чату относится сообщение
                 // Если отправили мы — ищем чат с получателем. Если нам — чат с отправителем.
-                string targetChatName = isOwn ? selectedContact?.Name ?? "" : chatMessage.User;
+                string targetChatName = isOwn ? selectedContact?.Name ?? string.Empty : chatMessage.User;
 
-                if (string.IsNullOrEmpty(targetChatName)) return;
+                if (string.IsNullOrWhiteSpace(targetChatName)) return;
 
                 // Ищем контакт в списке, если его нет — создаем динамически
                 var contact = contacts.FirstOrDefault(c => c.Name.Equals(targetChatName, StringComparison.OrdinalIgnoreCase));
@@ -157,75 +192,181 @@
                     contacts.Add(contact);
                 }
 
-                contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortDateString(), isOwn));
+                // Добавляем в UI
+                contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortTimeString(), isOwn));
 
-                InvokeAsync(StateHasChanged);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при обработке входящего сообщения: {ex.Message}");
-            }
-        });
+                // Сохраняем сообщение в IndexedDB
+                var dbMessage = new Message
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    ChatId = targetChatName,
+                    SenderId = chatMessage.User,
+                    Text = chatMessage.Text,
+                    TimestampUtc = DateTime.UtcNow,
+                    IsSynced = true,
+                    IsRead = isOwn || (selectedContact?.Name == targetChatName)
+                };
+                await Storage.SaveMessageAsync(dbMessage);
 
-        try
-        {
+                // Создаем/обновляем чат в IndexedDB
+                var dbChat = new Chat
+                {
+                    Id = targetChatName,
+                    Name = targetChatName,
+                    LastMessageText = chatMessage.Text,
+                    LastMessageTimestamp = DateTime.UtcNow,
+                    UnreadCount = (selectedContact?.Name == targetChatName) ? 0 : 1
+                };
+                await Storage.SaveChatAsync(dbChat);
+
+                await InvokeAsync(StateHasChanged);
+            });
+
             await hubConnection.StartAsync();
+            isLoggedIn = true;
+
+            // Загружаем существующую историю из IndexedDB
+            var savedChats = await Storage.GetChatsAsync();
+            contacts.Clear();
+            foreach (var chat in savedChats)
+            {
+                var contact = new Contact { Name = chat.Name };
+                var savedMessages = await Storage.GetMessagesForChatAsync(chat.Id, limit: 100);
+                savedMessages.Reverse(); // Сообщения возвращаются от новых к старым, поэтому реверсируем для правильного порядка в чате
+
+                foreach (var msg in savedMessages)
+                {
+                    bool isOwn = msg.SenderId.Equals(currentUserName, StringComparison.OrdinalIgnoreCase);
+                    contact.Messages.Add(new ChatMessage(
+                        User: msg.SenderId,
+                        Text: msg.Text,
+                        Timestamp: msg.TimestampUtc.ToLocalTime().ToShortTimeString(),
+                        IsOwnMessage: isOwn
+                    ));
+                }
+                contacts.Add(contact);
+            }
+
+            // ХАК ДЛЯ ТЕСТА: Чтобы было кому написать, автоматически добавим базовые контакты,
+            // если их нет в списке и мы зашли под определенными именами
+            if (currentUserName.Equals("Алиса", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!contacts.Any(c => c.Name.Equals("Боб", StringComparison.OrdinalIgnoreCase)))
+                    contacts.Add(new Contact { Name = "Боб" });
+            }
+            else if (currentUserName.Equals("Бob", StringComparison.OrdinalIgnoreCase) || currentUserName.Equals("Боб", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!contacts.Any(c => c.Name.Equals("Алиса", StringComparison.OrdinalIgnoreCase)))
+                    contacts.Add(new Contact { Name = "Алиса" });
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка при подключении к чату: {ex.Message}");
-            // Можно добавить показ ошибки пользователю
-            isLoggedIn = false;
-            return;
+            loginErrorMessage = $"Не удалось подключиться к серверу: {ex.Message}";
+            if (hubConnection is not null)
+            {
+                await hubConnection.DisposeAsync();
+                hubConnection = null;
+            }
+        }
+        finally
+        {
+            isConnecting = false;
+            StateHasChanged();
         }
     }
 
     private async Task SendMessage()
     {
-        if (hubConnection is not null && selectedContact is not null && !string.IsNullOrWhiteSpace(messageText))
+        if (hubConnection is not null && 
+            hubConnection.State == HubConnectionState.Connected && 
+            selectedContact is not null && 
+            !string.IsNullOrWhiteSpace(messageText))
         {
-            // Проверяем состояние подключения перед отправкой
-            if (hubConnection.State != HubConnectionState.Connected)
-            {
-                Console.WriteLine($"Подключение неактивно. Текущий статус: {hubConnection.State}");
-                
-                // Пытаемся переподключиться, если подключение было потеряно
-                if (hubConnection.State == HubConnectionState.Disconnected)
-                {
-                    try
-                    {
-                        await hubConnection.StartAsync();
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Ошибка при переподключении: {ex.Message}");
-                        return;
-                    }
-                }
-                else
-                {
-                    // Если подключение в процессе установки, ждем
-                    return;
-                }
-            }
+            var textToSend = messageText;
+            messageText = string.Empty;
 
-            // Вызываем наш приватный метод на сервере
+            // Сохраняем сообщение локально с IsSynced=false до отправки
+            var dbMessage = new Message
+            {
+                Id = Guid.NewGuid().ToString(),
+                ChatId = selectedContact.Name,
+                SenderId = currentUserName,
+                Text = textToSend,
+                TimestampUtc = DateTime.UtcNow,
+                IsSynced = false,
+                IsRead = true
+            };
+            await Storage.SaveMessageAsync(dbMessage);
+
+            // Обновляем превью чата
+            var dbChat = new Chat
+            {
+                Id = selectedContact.Name,
+                Name = selectedContact.Name,
+                LastMessageText = textToSend,
+                LastMessageTimestamp = DateTime.UtcNow,
+                UnreadCount = 0
+            };
+            await Storage.SaveChatAsync(dbChat);
+
             try
             {
-                await hubConnection.InvokeAsync("SendPrivateMessage", selectedContact.Name, messageText);
-                messageText = string.Empty;
+                await hubConnection.InvokeAsync("SendPrivateMessage", selectedContact.Name, textToSend);
+                // Подтверждаем успешную отправку на сервер
+                await Storage.UpdateMessageSyncStatusAsync(dbMessage.Id, true);
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Ошибка отправки сообщения: {e.Message}");
-                // Не выбрасываем исключение, чтобы не ломать UI
+                Console.WriteLine($"Ошибка при отправке сообщения: {e}");
+                // IsSynced остается false — сообщение будет доотправлено при реконнекте
             }
         }
     }
 
-    private void SelectContact(Contact contact)
+    private async Task RetrySendUnsyncedMessagesAsync()
+    {
+        try
+        {
+            var unsynced = await Storage.GetUnsyncedMessagesAsync();
+            foreach (var msg in unsynced)
+            {
+                try
+                {
+                    await hubConnection!.InvokeAsync("SendPrivateMessage", msg.ChatId, msg.Text);
+                    await Storage.UpdateMessageSyncStatusAsync(msg.Id, true);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine($"Не удалось доотправить сообщение {msg.Id}: {e.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при доотправке сообщений: {ex.Message}");
+        }
+    }
+
+    private async Task SelectContact(Contact contact)
     {
         selectedContact = contact;
+        // Помечаем сообщения как прочитанные в локальной базе данных
+        try
+        {
+            await Storage.MarkMessagesAsReadAsync(contact.Name);
+            // Также обновим нечитанные в чате
+            var dbChat = await Storage.GetChatByIdAsync(contact.Name);
+            if (dbChat != null)
+            {
+                dbChat.UnreadCount = 0;
+                await Storage.SaveChatAsync(dbChat);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при пометке сообщений прочитанными: {ex}");
+        }
     }
 
     private async Task HandleKeyPress(KeyboardEventArgs e)
