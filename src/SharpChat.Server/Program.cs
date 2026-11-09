@@ -35,4 +35,4 @@ app.UseCors("AllowAllMessenger");
 // Маппим наш хаб на определенный URL-адрес
 app.MapHub<ChatHub>("/chathub");
 
-app.Run("http://0.0.0.0:5221");
+app.Run();

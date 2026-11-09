@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Tavenem.DataStorage;
 
 namespace Messenger.BlazorClient.Models.StorageModels;
@@ -10,6 +11,7 @@ public class Message : IIdItem
     /// <summary>
     /// Уникальный идентификатор сообщения
     /// </summary>
+    [JsonPropertyName("id")]
     public string Id { get; set; } = Guid.NewGuid().ToString();
     
     /// <summary>

@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using Messenger.BlazorClient;
 using Messenger.BlazorClient.Services;
 using Messenger.BlazorClient.Storage;
-using System.Text.Json;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
@@ -19,7 +18,6 @@ builder.Services.AddIndexedDb(
     databaseName: IndexedDbConfig.DatabaseName,
     objectStores: IndexedDbConfig.ObjectStores,
     version: IndexedDbConfig.DatabaseVersion,
-    jsonSerializerOptions: new JsonSerializerOptions(JsonSerializerDefaults.Web),
     key: "id"); // Используем "id" как ключ для всех объектов
 
 // Регистрация сервиса хранилища

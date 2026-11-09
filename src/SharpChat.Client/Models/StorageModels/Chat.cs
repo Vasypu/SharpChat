@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Tavenem.DataStorage;
 
 namespace Messenger.BlazorClient.Models.StorageModels;
@@ -10,6 +11,7 @@ public class Chat : IIdItem
     /// <summary>
     /// Уникальный идентификатор чата (обычно username собеседника)
     /// </summary>
+    [JsonPropertyName("id")]
     public string Id { get; set; } = string.Empty;
     
     /// <summary>

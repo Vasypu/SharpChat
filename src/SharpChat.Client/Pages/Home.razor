@@ -49,7 +49,7 @@
                     {
                         <div class="contact-item @(selectedContact == contact ? "active" : "")" 
                              @onclick="() => SelectContact(contact)">
-                            <div class="contact-avatar">@contact.Name[0].ToString().ToUpper()</div>
+                            <div class="contact-avatar">@(string.IsNullOrEmpty(contact.Name) ? "?" : contact.Name[0].ToString().ToUpper())</div>
                             <div class="contact-info">
                                 <div class="contact-name">@contact.Name</div>
                                 <div class="contact-last-msg">
@@ -150,7 +150,7 @@
         try
         {
             var uri = new Uri(Navigation.Uri);
-            var hubUrl = $"{uri.Scheme}://{uri.Host}:5221/chathub?username={Uri.EscapeDataString(currentUserName)}";
+            var hubUrl = $"{uri.Scheme}://{uri.Host}:7138/chathub?username={Uri.EscapeDataString(currentUserName)}";
 
             // Настройка SignalR с передачей username в Query String
             hubConnection = new HubConnectionBuilder()
@@ -192,21 +192,34 @@
                     contacts.Add(contact);
                 }
 
-                // Добавляем в UI
-                contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortTimeString(), isOwn));
-
-                // Сохраняем сообщение в IndexedDB
-                var dbMessage = new Message
+                if (isOwn)
                 {
-                    Id = Guid.NewGuid().ToString(),
-                    ChatId = targetChatName,
-                    SenderId = chatMessage.User,
-                    Text = chatMessage.Text,
-                    TimestampUtc = DateTime.UtcNow,
-                    IsSynced = true,
-                    IsRead = isOwn || (selectedContact?.Name == targetChatName)
-                };
-                await Storage.SaveMessageAsync(dbMessage);
+                    // Проверяем, есть ли уже это сообщение в UI (чтобы не дублировать отправленное локально)
+                    if (!contact.Messages.Any(m => m.IsOwnMessage && m.Text == chatMessage.Text))
+                    {
+                        contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortTimeString(), true));
+                    }
+                    Console.WriteLine($"[{currentUserName}] Эхо собственного сообщения");
+                }
+                else
+                {
+                    // Добавляем в UI
+                    contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortTimeString(), false));
+
+                    // Входящее сообщение от собеседника — сохраняем в IndexedDB
+                    var dbMessage = new Message
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        ChatId = targetChatName,
+                        SenderId = chatMessage.User,
+                        Text = chatMessage.Text,
+                        TimestampUtc = DateTime.UtcNow,
+                        IsSynced = true,
+                        IsRead = selectedContact?.Name == targetChatName
+                    };
+                    await Storage.SaveMessageAsync(dbMessage);
+                    Console.WriteLine($"[{currentUserName}] Входящее сообщение сохранено: ChatId={targetChatName}, MsgId={dbMessage.Id}");
+                }
 
                 // Создаем/обновляем чат в IndexedDB
                 var dbChat = new Chat
