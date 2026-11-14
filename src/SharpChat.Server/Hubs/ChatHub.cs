@@ -1,6 +1,7 @@
+using Common;
 using Microsoft.AspNetCore.SignalR;
 
-namespace MessengerServer;
+namespace MessengerServer.Hubs;
 
 public class ChatHub : Hub
 {
@@ -21,15 +22,9 @@ public class ChatHub : Hub
         Console.WriteLine($"[Private] {senderUser} -> {targetUser}: {message}");
 
         // 1. Отправляем сообщение получателю (targetUser)
-        await Clients.User(targetUser).SendAsync("ReceivePrivateMessage", new ChatMessage(senderUser, message, time));
+        await Clients.User(targetUser).SendAsync("ReceivePrivateMessage", new ChatMessage(senderUser, message, time, isOwnMessage: false, ChatStatus.Sent));
 
         // 2. Отправляем копию самому себе (senderUser), чтобы у нас в консоли/чате оно тоже отобразилось
-        await Clients.User(senderUser).SendAsync("ReceivePrivateMessage", new ChatMessage(senderUser, message, time));
+        await Clients.User(senderUser).SendAsync("ReceivePrivateMessage", new ChatMessage(senderUser, message, time, isOwnMessage: true, ChatStatus.Sent));
     }
 }
-
-public record ChatMessage(
-    string User, 
-    string Text, 
-    string Timestamp
-);

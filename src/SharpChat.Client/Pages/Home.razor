@@ -1,10 +1,12 @@
 ﻿@page "/"
+@using Common
 @using Messenger.BlazorClient.Models
 @using Microsoft.AspNetCore.SignalR.Client
 @using Messenger.BlazorClient.Services
 @using Messenger.BlazorClient.Models.StorageModels
 @inject NavigationManager Navigation
 @inject IStorageService Storage
+@inject P2PChatService P2PChatService
 @implements IAsyncDisposable
 
 <div class="messenger-app">
@@ -29,7 +31,19 @@
                     }
                     else
                     {
-                        <span>Войти</span>
+                        <span>Войти PSP</span>
+                    }
+                </button>
+
+                <button @onclick="ConnectToP2PChat" disabled="@(string.IsNullOrWhiteSpace(currentUserName) || isConnecting)" class="btn btn-primary w-100">
+                    @if (isConnecting)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        <span> Подключение...</span>
+                    }
+                    else
+                    {
+                        <span>Войти P2P</span>
                     }
                 </button>
             </div>
@@ -53,7 +67,7 @@
                             <div class="contact-info">
                                 <div class="contact-name">@contact.Name</div>
                                 <div class="contact-last-msg">
-                                    @(contact.Messages.LastOrDefault()?.Text ?? "Нет сообщений")
+                                    @(contact.Messages.LastOrDefault()?.Content ?? "Нет сообщений")
                                 </div>
                             </div>
                         </div>
@@ -82,7 +96,7 @@
                         {
                             <div class="message-wrapper @(msg.IsOwnMessage ? "own-wrapper" : "their-wrapper")">
                                 <div class="message-bubble @(msg.IsOwnMessage ? "own" : "their")">
-                                    <div class="message-text">@msg.Text</div>
+                                    <div class="message-text">@msg.Content</div>
                                     <div class="message-time">@msg.Timestamp</div>
                                 </div>
                             </div>
@@ -176,11 +190,11 @@
             // Слушаем приватные сообщения от сервера
             hubConnection.On<ChatMessage>("ReceivePrivateMessage", async chatMessage =>
             {
-                bool isOwn = chatMessage.User.Equals(currentUserName, StringComparison.OrdinalIgnoreCase);
+                //bool isOwn = chatMessage.ToUserId.Equals(currentUserName, StringComparison.OrdinalIgnoreCase);
 
                 // Определяем, к какому чату относится сообщение
                 // Если отправили мы — ищем чат с получателем. Если нам — чат с отправителем.
-                string targetChatName = isOwn ? selectedContact?.Name ?? string.Empty : chatMessage.User;
+                string targetChatName = chatMessage.IsOwnMessage ? selectedContact?.Name ?? string.Empty : chatMessage.ToUserId;
 
                 if (string.IsNullOrWhiteSpace(targetChatName)) return;
 
@@ -192,27 +206,26 @@
                     contacts.Add(contact);
                 }
 
-                if (isOwn)
+                if (chatMessage.IsOwnMessage)
                 {
                     // Проверяем, есть ли уже это сообщение в UI (чтобы не дублировать отправленное локально)
-                    if (!contact.Messages.Any(m => m.IsOwnMessage && m.Text == chatMessage.Text))
+                    if (!contact.Messages.Any(m => m.IsOwnMessage && m.Content == chatMessage.Content))
                     {
-                        contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortTimeString(), true));
+                        contact.Messages.Add(new ChatMessage(chatMessage.ToUserId, chatMessage.Content, DateTime.Now.ToShortTimeString(), isOwnMessage: true, ChatStatus.Delivered));
                     }
-                    Console.WriteLine($"[{currentUserName}] Эхо собственного сообщения");
                 }
                 else
                 {
                     // Добавляем в UI
-                    contact.Messages.Add(new ChatMessage(chatMessage.User, chatMessage.Text, DateTime.Now.ToShortTimeString(), false));
+                    contact.Messages.Add(new ChatMessage(chatMessage.ToUserId, chatMessage.Content, DateTime.Now.ToShortTimeString(), isOwnMessage: false, ChatStatus.Delivered));
 
                     // Входящее сообщение от собеседника — сохраняем в IndexedDB
                     var dbMessage = new Message
                     {
                         Id = Guid.NewGuid().ToString(),
                         ChatId = targetChatName,
-                        SenderId = chatMessage.User,
-                        Text = chatMessage.Text,
+                        SenderId = chatMessage.ToUserId,
+                        Text = chatMessage.Content,
                         TimestampUtc = DateTime.UtcNow,
                         IsSynced = true,
                         IsRead = selectedContact?.Name == targetChatName
@@ -226,7 +239,7 @@
                 {
                     Id = targetChatName,
                     Name = targetChatName,
-                    LastMessageText = chatMessage.Text,
+                    LastMessageText = chatMessage.Content,
                     LastMessageTimestamp = DateTime.UtcNow,
                     UnreadCount = (selectedContact?.Name == targetChatName) ? 0 : 1
                 };
@@ -251,10 +264,11 @@
                 {
                     bool isOwn = msg.SenderId.Equals(currentUserName, StringComparison.OrdinalIgnoreCase);
                     contact.Messages.Add(new ChatMessage(
-                        User: msg.SenderId,
-                        Text: msg.Text,
-                        Timestamp: msg.TimestampUtc.ToLocalTime().ToShortTimeString(),
-                        IsOwnMessage: isOwn
+                        toUserId: msg.SenderId,
+                        content: msg.Text,
+                        timestamp: msg.TimestampUtc.ToLocalTime().ToShortTimeString(),
+                        isOwnMessage: isOwn,
+                        ChatStatus.Delivered
                     ));
                 }
                 contacts.Add(contact);
@@ -272,6 +286,66 @@
                 if (!contacts.Any(c => c.Name.Equals("Алиса", StringComparison.OrdinalIgnoreCase)))
                     contacts.Add(new Contact { Name = "Алиса" });
             }
+        }
+        catch (Exception ex)
+        {
+            loginErrorMessage = $"Не удалось подключиться к серверу: {ex.Message}";
+            if (hubConnection is not null)
+            {
+                await hubConnection.DisposeAsync();
+                hubConnection = null;
+            }
+        }
+        finally
+        {
+            isConnecting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ConnectToP2PChat()
+    {
+        loginErrorMessage = null;
+        isConnecting = true;
+        StateHasChanged();
+
+        try
+        {
+            await P2PChatService.InitializeAsync(currentUserName);
+
+            P2PChatService.Peers!.OnMessageReceived += message =>
+            {
+                // обработка
+            };
+
+
+            //var uri = new Uri(Navigation.Uri);
+            //var hubUrl = $"{uri.Scheme}://{uri.Host}:7138/signalinghub?username={Uri.EscapeDataString(currentUserName)}";
+
+            // Настройка SignalR с передачей username в Query String
+            /*hubConnection = new HubConnectionBuilder()
+                .WithUrl(hubUrl)
+                .WithAutomaticReconnect()
+                .Build();*/
+
+            /*hubConnection.On<SignalMessage>("ReceiveSignal", async signal =>
+            {
+                // Здесь вызываешь PeerConnectionManager.HandleSignal(signal)
+                await PeerConnectionService.HandleSignalAsync(signal);
+            });*/
+
+            hubConnection.On<string>("UserOnline", userId =>
+            {
+                // Обновить UI — пользователь появился
+            });
+
+            hubConnection.On<string>("UserOffline", userId =>
+            {
+                // Обновить UI — пользователь ушёл
+            });
+
+            await hubConnection.StartAsync();
+            isLoggedIn = true;
         }
         catch (Exception ex)
         {

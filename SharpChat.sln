@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MessengerServer", "src\Shar
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Messenger.BlazorClient", "src\SharpChat.Client\Messenger.BlazorClient.csproj", "{FA1F9FC3-4339-41C8-9487-45C0A5F2E9B3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Common", "src\Common\Common.csproj", "{6F9F80EA-9026-4884-848F-78D334CD35D9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,9 +28,14 @@ Global
 		{FA1F9FC3-4339-41C8-9487-45C0A5F2E9B3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FA1F9FC3-4339-41C8-9487-45C0A5F2E9B3}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FA1F9FC3-4339-41C8-9487-45C0A5F2E9B3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6F9F80EA-9026-4884-848F-78D334CD35D9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6F9F80EA-9026-4884-848F-78D334CD35D9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6F9F80EA-9026-4884-848F-78D334CD35D9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6F9F80EA-9026-4884-848F-78D334CD35D9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{3CFE2F8C-584C-4448-9D09-AA9C4041B8A1} = {FAC36656-B08F-4097-8E2C-9B7100C4BCF8}
 		{FA1F9FC3-4339-41C8-9487-45C0A5F2E9B3} = {FAC36656-B08F-4097-8E2C-9B7100C4BCF8}
+		{6F9F80EA-9026-4884-848F-78D334CD35D9} = {FAC36656-B08F-4097-8E2C-9B7100C4BCF8}
 	EndGlobalSection
 EndGlobal

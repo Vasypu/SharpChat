@@ -1,4 +1,5 @@
 using MessengerServer;
+using MessengerServer.Hubs;
 using Microsoft.AspNetCore.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -34,5 +35,7 @@ app.UseCors("AllowAllMessenger");
 
 // Маппим наш хаб на определенный URL-адрес
 app.MapHub<ChatHub>("/chathub");
+
+app.MapHub<SignalingHub>("/signalinghub");
 
 app.Run();

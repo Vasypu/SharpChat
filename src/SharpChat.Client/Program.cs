@@ -18,9 +18,12 @@ builder.Services.AddIndexedDb(
     databaseName: IndexedDbConfig.DatabaseName,
     objectStores: IndexedDbConfig.ObjectStores,
     version: IndexedDbConfig.DatabaseVersion,
-    key: "id"); // Используем "id" как ключ для всех объектов
+    key: IndexedDbConfig.Id); // Используем "id" как ключ для всех объектов
 
 // Регистрация сервиса хранилища
 builder.Services.AddScoped<IStorageService, StorageService>();
+
+builder.Services.AddScoped<IPeerConnectionManagerFactory, PeerConnectionManagerFactory>();
+builder.Services.AddScoped<P2PChatService>();
 
 await builder.Build().RunAsync();

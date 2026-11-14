@@ -1,3 +1,5 @@
+using Common;
+
 namespace Messenger.BlazorClient.Models;
 
 public class Contact
